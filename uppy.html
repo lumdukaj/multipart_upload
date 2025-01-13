@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<link href="https://releases.transloadit.com/uppy/v4.9.0/uppy.min.css" rel="stylesheet">
+	<title>Uppy Multipart Upload with S3</title>
+</head>
+
+<style>
+	button {
+		margin: 20px 0;
+		padding: 10px;
+		background-color: #007bff;
+		color: white;
+		border: none;
+		border-radius: 5px;
+		cursor: pointer;
+		font-size: 16px;
+	}
+
+	button:hover {
+		background-color: #0056b3;
+	}
+
+	button:disabled {
+		background-color: #cccccc;
+		cursor: not-allowed;
+	}
+</style>
+
+<body>
+	<h1>Upload Files to Amazon S3</h1>
+	<div id="uppy"></div>
+	<button id="startUpload">Start Upload</button>
+
+	<script type="module">
+		import { Uppy, DragDrop, ProgressBar, AwsS3 } from "https://releases.transloadit.com/uppy/v4.9.0/uppy.min.mjs";
+
+		const FILE_CHUNK_SIZE = 51200 * 1024; // ~50MiB in Bytes
+		const BEARER = "eyJhbGciOiJSUzI1NiIsImtpZCI6IkU2MzY5NjQ0RTk5RTMzRTZFODRBRkNGOThDMjZEMTQwMzlGREQwMjBSUzI1NiIsInR5cCI6ImF0K2p3dCIsIng1dCI6IjVqYVdST21lTS1ib1N2ejVqQ2JSUURuOTBDQSJ9.eyJuYmYiOjE3MzQ2MDkwMzUsImV4cCI6MTczNzIwMTAzNSwiaXNzIjoiaHR0cHM6Ly9hY2NvdW50LmdqaXJhZmEudGVjaCIsImF1ZCI6WyJnamlyYWZhdGVjaF9pZGVudGl0eV9hZG1pbl9hcGkiLCJvZmZsaW5lX2FjY2VzcyJdLCJjbGllbnRfaWQiOiJ2cF92dWVfYWRtaW4iLCJzdWIiOiJhNzczNjVhMC0wYzE2LTQ2NDMtOWY3NC0xMTk0ZjdkYjg5ZGQiLCJhdXRoX3RpbWUiOjE3MzQwNDUxMjY1OTMzNzg2LCJpZHAiOiJHb29nbGUiLCJnaXZlbl9uYW1lIjoiTHVtIiwiZmFtaWx5X25hbWUiOiJEdWthaiIsIm5hbWUiOiJMdW0gRHVrYWoiLCJiaXJ0aGRhdGUiOiIyMDAxLTA2LTA5IiwiZ2VuZGVyIjoibWFsZSIsInVwZGF0ZWRfYXQiOiIxNzA2MTc1NzM0LjgxOTE3NTIiLCJsYW5ndWFnZV9jb2RlIjoiZW4iLCJwcmVmZXJyZWRfdXNlcm5hbWUiOiJsdW1AZ2ppcmFmYS5jb20iLCJlbWFpbCI6Imx1bUBnamlyYWZhLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJqdGkiOiIyMjFBRjEzMTk0OUI3RTgwMEVCMUNBOUEwNkIzNjVCRiIsInNpZCI6IkJDOTBBQTZBQjQ2MTA3MEJBRTRCQkE1QjREQTJCMDFBIiwiaWF0IjoxNzM0NjA5MDM1LCJzY29wZSI6WyJ2cF92dWVfYWRtaW4iLCJvcGVuaWQiLCJ2cF9hZG1pbl9hcGkiLCJnamlyYWZhdGVjaF9pZGVudGl0eV9hZG1pbl9hcGkiLCJvZmZsaW5lX2FjY2VzcyJdLCJhbXIiOlsicHdkIl19.FUD8ZjL-M2VlUzEITbOELJGH71E2Vw9rLa3tvkTILuAHlKIEghw8Ncz0SeqQrYI79pdP8kgDGyPVRGkWovM1tmfgNiDL6_coziHWL_PCxHbb7wift1uBariOLubmNTK466_EbZT4k0858WiiPaQy7t0FpSAA_X4A3O7YWa3Fe4jUe3eeyd9DXZb45WfOAexZ6U8wehDPPzP-RyxcbV8UXSQcPkJnxrhcawls8NW5bp8Sf7KdvDVhB0tGZt2eW3AoI1LeA7qYsffBBV9oGE-A5q0UfX8UXsVR_aHW1SHwlREKlEs7Mc6prqSuBgJQhXNynnr3MzEVMxj9mTgjREjzbQ";
+		let presignedUrls = [];
+
+		// Initialize Uppy
+		const uppy = new Uppy({
+			debug: true,
+			restrictions: {
+				maxFileSize: FILE_CHUNK_SIZE * 10, // 500MiB max
+				maxNumberOfFiles: 1, // Single file upload
+				allowedFileTypes: ['video/*'], // Restrict to videos
+			},
+			autoProceed: false, // Do not start uploads automatically
+		});
+
+		uppy.use(DragDrop, { target: '#uppy', note: 'Drag & drop files here or click to select.' });
+		uppy.use(ProgressBar, { target: 'body', fixed: true });
+
+
+		// Use AwsS3 for direct multipart uploads to S3
+		uppy.use(AwsS3, {
+			// This function should return the size of the chunks to use
+			getChunkSize() {
+				return FILE_CHUNK_SIZE;
+			},
+			// This function should return a boolean indicating whether to use multipart uploads
+			// For this example, we always use multipart uploads
+			shouldUseMultipart() {
+				return true;
+			},
+			createMultipartUpload: async (file) => {
+				try {
+					const response = await fetch("https://vp-api.gjirafa.dev/api/projects/agmipnxd/uploads/multipart", {
+						headers: {
+							Accept: "application/json",
+							Authorization: `Bearer ${BEARER}`,
+							"Content-Type": "application/json",
+						},
+						method: "POST",
+						body: JSON.stringify({
+							partsNumber: Math.ceil(file.size / (FILE_CHUNK_SIZE)),
+							fileName: file.name,
+							contentLength: FILE_CHUNK_SIZE,
+							mimeType: file.type,
+						}),
+					});
+
+					if (!response.ok) {
+						throw new Error(`Failed to fetch presigned URLs: ${response.statusText}`);
+					}
+
+					const { result } = await response.json();
+
+					// Save the presigned URLs for each part
+					presignedUrls = result.presignedUrl;
+
+					// The required format for uppy -> { uploadId, key }
+					const { uploadId, requestKey: key } = result;
+
+					return { uploadId, key };
+
+				} catch (error) {
+					console.error(error);
+					throw error;
+				}
+			},
+			signPart: async (file, partData) => {
+				const url = presignedUrls[partData.partNumber - 1].presignedUrl;
+				return { url, headers: { "Content-Type": "application/octet-stream" } };
+			},
+			completeMultipartUpload: async (file, { uploadId, key, parts }) => {
+				// The required format from vp-api -> { requestKey, parts: [{ eTag, partNumber }] }
+				const parsedParts = parts.map((part) => ({
+					eTag: part.ETag.split('\"').join(''),
+					partNumber: part.PartNumber,
+				}));
+
+				const response = await fetch('https://vp-api.gjirafa.dev/api/projects/agmipnxd/uploads/multipart-complete', {
+					method: 'PUT',
+					headers: {
+						'Content-Type': 'application/json',
+						Authorization: `Bearer ${BEARER}`,
+					},
+					body: JSON.stringify({
+						requestKey: key,
+						parts: parsedParts,
+					}),
+				});
+
+				if (!response.ok) {
+					throw new Error(`Failed to complete multipart upload: ${response.statusText}`);
+				}
+
+				return response.json();
+			},
+		});
+
+		const encodeInit = async (requestKey) => {
+			try {
+				const response = await fetch("https://vp-api.gjirafa.dev/api/projects/agmipnxd/encodes", {
+					headers: {
+						Accept: "application/json",
+						Authorization: `Bearer ${BEARER}`,
+						"Content-Type": "application/json",
+					},
+					method: "POST",
+					body: JSON.stringify({
+						downloadUrl: requestKey,
+					}),
+				});
+
+			} catch (error) {
+				console.error(error);
+				throw error;
+			}
+		}
+
+		uppy.on('upload-success', (file, response) => {
+			const requestKey = file.s3Multipart.key;
+			encodeInit(requestKey);
+		});
+
+		uppy.on('error', (error) => {
+			console.error('Upload error:', error);
+		});
+
+		// Start upload
+		document.getElementById('startUpload').addEventListener('click', () => {
+			uppy.upload();
+		});
+	</script>
+</body>
+
+</html>

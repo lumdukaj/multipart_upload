@@ -1,0 +1,19 @@
+{
+	"name": "multipart_upload",
+	"version": "1.0.0",
+	"private": true,
+	"scripts": {
+		"test": "echo \"Error: no test specified\" && exit 1",
+		"build": "webpack",
+		"build-watch": "webpack --watch --mode=development"
+	},
+	"keywords": [],
+	"author": "",
+	"license": "ISC",
+	"description": "",
+	"dependencies": {
+		"@uppy/aws-s3": "^4.2.1",
+		"webpack": "^5.97.1",
+		"webpack-cli": "^6.0.1"
+	}
+}
