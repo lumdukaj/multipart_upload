@@ -1,6 +1,6 @@
 {
 	"name": "vpuploader",
-	"version": "1.0.1",
+	"version": "1.0.0",
 	"main": "./src/index.js",
 	"type": "module",
 	"scripts": {
