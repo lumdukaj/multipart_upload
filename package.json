@@ -1,18 +1,26 @@
 {
-	"name": "multipart_upload",
-	"version": "1.0.0",
-	"private": true,
+	"name": "vpuploader",
+	"version": "1.0.1",
+	"main": "./src/index.js",
+	"type": "module",
 	"scripts": {
-		"test": "echo \"Error: no test specified\" && exit 1",
-		"build": "webpack",
+		"test": "",
+		"build": "webpack --mode=production",
 		"build-watch": "webpack --watch --mode=development"
 	},
+	"files": [
+		"index.js",
+		"src/",
+		"README.md"
+	],
 	"keywords": [],
-	"author": "",
+	"author": "VPPLAYER",
 	"license": "ISC",
 	"description": "",
 	"dependencies": {
-		"@uppy/aws-s3": "^4.2.1",
+		"@uppy/aws-s3": "^4.2.1"
+	},
+	"devDependencies": {
 		"webpack": "^5.97.1",
 		"webpack-cli": "^6.0.1"
 	}
