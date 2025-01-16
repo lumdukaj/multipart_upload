@@ -19,11 +19,18 @@ class VpUploader {
 		this.chunkSize = this.config.chunkSize;
 		this.debug = this.config.debug;
 		this.allowedFileTypes = this.config.allowedFileTypes;
-		this.presignedUrls = [];
-		this.uploadId = null;
-		this.requestKey = null;
+		/**
+		 * Map to store details of each file being uploaded.
+		 * @type {Map<string, Object>}
+		 * @property {string} requestKey - Request key for the upload
+		 * @property {string} uploadId - Upload ID for the upload
+		 * @property {Array<string>} presignedUrls - Array of presigned URLs for each part
+		 * @property {boolean} isMultiPart - Flag to indicate if the file is multipart
+		 */
+		this.fileDetails = new Map();
+
 		this.uppy = null;
-		this.isMultiPart = false;
+
 		/**
 		 * Callback to be called on multipart complete.
 		 * Gets called with an object containing requestKey and parts.
@@ -71,16 +78,22 @@ class VpUploader {
 		});
 
 		this.setUppyEventListeners();
-		this.bindGetterMethods();
+		this.bindMethods();
 	}
 
 	async handleCreateMultipartUpload(file) {
 		try {
-			if (!this.requestKey) throw new Error("Request key not set.");
-			if (this.isMultiPart && !this.uploadId)
+			const details = this.fileDetails.get(file.name);
+			if (!details) throw new Error("Details not found for the file.");
+
+			const { requestKey, uploadId, isMultiPart } = details;
+
+			if (!requestKey) throw new Error("Request key not set.");
+
+			if (isMultiPart && !uploadId)
 				throw new Error("Upload ID not set. This is needed for multipart uploads.");
 
-			return { uploadId: this.uploadId, key: this.requestKey };
+			return { uploadId: uploadId, key: requestKey };
 		} catch (error) {
 			this.log(`Error in createMultipartUpload: ${error}`, "error");
 			throw error;
@@ -89,10 +102,12 @@ class VpUploader {
 
 	handleSignPart(file, partData) {
 		try {
-			if (!this.presignedUrls) throw new Error("Presigned URLs are missing");
+			const details = this.fileDetails.get(file.name);
+			const { presignedUrls, isMultiPart } = details;
+			if (!presignedUrls) throw new Error("Presigned URLs are missing");
 
-			const index = this.isMultiPart ? partData.partNumber - 1 : 0;
-			const url = this.presignedUrls[index];
+			const index = isMultiPart ? partData.partNumber - 1 : 0;
+			const url = presignedUrls[index];
 			return { url, headers: { "Content-Type": "application/octet-stream" } };
 		} catch (error) {
 			this.log(`Error in signPart: ${error}`, "error");
@@ -103,8 +118,10 @@ class VpUploader {
 	// This method needs to return an object to fit with the Uppy API, but we don't need to do anything here so we just return an empty object.
 	async handleCompleteMultipartUpload(file, { uploadId, key, parts }) {
 		try {
+			const details = this.fileDetails.get(file.name);
+			const { requestKey, isMultiPart } = details;
 			// Skip in case of single part upload
-			if (!this.isMultiPart) return {};
+			if (!isMultiPart) return {};
 
 			if (!this.onMultipartComplete) {
 				this.log("No onMultipartComplete callback provided", "warn");
@@ -117,7 +134,7 @@ class VpUploader {
 			}));
 
 			this.onMultipartComplete({
-				requestKey: key,
+				requestKey,
 				parts: parsedParts,
 			});
 
@@ -135,38 +152,97 @@ class VpUploader {
 		});
 
 		this.uppy.on("upload-success", async (file) => {
-			this.log("Upload successful", "info");
-			if (!this.onSuccess) {
-				this.log("No onSuccess callback provided", "warn");
-				return;
-			}
+			try {
+				this.log("Upload successful", "info");
 
-			const requestKey = file.s3Multipart.key;
-			this.onSuccess({ requestKey });
+				// Lastly, we need to remove the file that has been uploaded from uppy and clear the file details
+				this.removeFile(file.id);
+				this.fileDetails.delete(file.name);
 
-			// Clear the state after successful upload
-			// Shouldnt be called if upload is ongoing
-			// this.uppy.clear();
+				if (!this.onSuccess) {
+					this.log("No onSuccess callback provided", "info");
+					return;
+				}
+
+				const requestKey = file.s3Multipart.key;
+				this.onSuccess({ requestKey });
+			} catch (error) {}
 		});
 
-		this.uppy.on("error", async (error) => {
+		this.uppy.on("error", async (error, file, response) => {
 			this.log(`Upload error: ${error}`, "error");
 
 			if (!this.onError) {
-				this.log("No onError callback provided", "warn");
+				this.log("No onError callback provided", "info");
 				return;
 			}
 
-			this.onError(error);
+			const details = this.fileDetails.get(file.name);
+
+			this.onError({ error, details, file, response });
+		});
+
+		this.uppy.on("file-removed", (file) => {
+			this.log("File removed", "info", file);
+
+			// We add this in case removeFile is called directly
+			this.fileDetails.delete(file.name);
+
+			if (!this.onFileRemoved) {
+				this.log("No onFileRemoved callback provided", "info");
+				return;
+			}
+
+			this.onFileRemoved(file);
+		});
+
+		this.uppy.on("cancel-all", (event) => {
+			this.log("All uploads cancelled", "info", event);
+
+			this.fileDetails.clear();
+
+			if (!this.onCancelAll) {
+				this.log("No onCancelAll callback provided", "info");
+				return;
+			}
+
+			this.onCancelAll();
 		});
 	}
 
-	bindGetterMethods() {
+	bindMethods() {
 		this.getFile = this.uppy.getFile.bind(this.uppy);
 		this.getFiles = this.uppy.getFiles.bind(this.uppy);
 		this.getFilesByIds = this.uppy.getFilesByIds.bind(this.uppy);
 		this.getState = this.uppy.getState.bind(this.uppy);
 		this.getObjectOfFilesPerState = this.uppy.getObjectOfFilesPerState.bind(this.uppy);
+
+		/**
+		 * @param {string} fileId - ID of the file to be removed
+		 * Removes a file from Uppy. Removing a file that is already being uploaded will cancel the upload.
+		 */
+		this.removeFile = this.uppy.removeFile.bind(this.uppy);
+		// Cancels all uploads in progress.
+		this.cancelAll = this.uppy.cancelAll.bind(this.uppy);
+
+		this.retryUpload = this.uppy.retryUpload.bind(this.uppy);
+		this.retryAll = this.uppy.retryAll.bind(this.uppy);
+	}
+
+	getFileDetails(file) {
+		if (!(file instanceof File))
+			return this.log("Invalid file provided. Please provide a File object.", "info");
+
+		return this.fileDetails.get(file.name);
+	}
+
+	setFileDetails(file, detailToAdd) {
+		if (!(file instanceof File))
+			return this.log("Invalid file provided. Please provide a File object.", "info");
+
+		const existingDetails = this.fileDetails.get(file.name) || {};
+		const updatedDetails = { ...existingDetails, ...detailToAdd };
+		this.fileDetails.set(file.name, updatedDetails);
 	}
 
 	validateConfig(userConfig = {}) {
@@ -226,7 +302,7 @@ class VpUploader {
 				throw new Error("Presigned URLs must be a non-empty array.");
 			}
 
-			if (this.isMultiPart) {
+			if (details.isMultiPart) {
 				if (typeof details.uploadId !== "string" || details.uploadId.length === 0) {
 					throw new Error(
 						"Upload ID is required for multipart uploads and must be a non-empty string."
@@ -250,12 +326,16 @@ class VpUploader {
 	 * @param {Function} callbacks.onSuccess - Callback to be called on successful
 	 * @param {Function} callbacks.onError - Callback to be called on error
 	 * @param {Function} callbacks.onProgress - Callback to be called on progress
+	 * @param {Function} callbacks.onFileRemoved - Callback to be called on file removed
+	 * @param {Function} callbacks.onCancelAll - Callback to be called on cancel all
 	 */
 	use(callbacks) {
 		if (callbacks.onMultipartComplete) this.onMultipartComplete = callbacks.onMultipartComplete;
 		if (callbacks.onSuccess) this.onSuccess = callbacks.onSuccess;
 		if (callbacks.onError) this.onError = callbacks.onError;
 		if (callbacks.onProgress) this.onProgress = callbacks.onProgress;
+		if (callbacks.onFileRemoved) this.onFileRemoved = callbacks.onFileRemoved;
+		if (callbacks.onCancelAll) this.onCancelAll = callbacks.onCancelAll;
 	}
 
 	/**
@@ -267,18 +347,16 @@ class VpUploader {
 	 * @param {*} onMultipartComplete - Callback to be called on multipart complete
 	 * @param {*} onSuccess - Callback to be called on successful
 	 */
-	upload(file, details) {
+	async upload(file, details = {}) {
 		if (!(file instanceof File)) {
 			throw new Error("Invalid file provided. Please provide a File object.");
 		}
 
-		this.isMultiPart = file.size > this.chunkSize;
+		details.isMultiPart = file.size > this.chunkSize;
 
 		this.validateDetails(details);
 
-		this.requestKey = details.requestKey;
-		this.uploadId = details.uploadId;
-		this.presignedUrls = details.presignedUrls;
+		this.fileDetails.set(file.name, details);
 
 		this.uppy.addFile({
 			name: file.name,
@@ -286,11 +364,57 @@ class VpUploader {
 			data: file,
 		});
 
-		this.uppy.upload();
+		return this.uppy.upload();
 	}
 
-	log(message, level = "log") {
-		if (this.debug) console[level](message);
+	async uploadFiles(fileObjects, { onAllSuccess, onSomeFailure } = {}) {
+		if (!Array.isArray(fileObjects)) {
+			throw new Error(
+				"Invalid input. Provide an array of objects, each containing a file and its details."
+			);
+		}
+
+		// Validate each file object
+		fileObjects.forEach(({ file, details }, index) => {
+			if (!(file instanceof File)) {
+				throw new Error(`Invalid file at index ${index}. Ensure all files are instances of File.`);
+			}
+
+			if (!details || typeof details !== "object") {
+				throw new Error(
+					`Invalid details at index ${index}. Provide a valid details object for each file.`
+				);
+			}
+
+			if (!details.requestKey || !Array.isArray(details.presignedUrls)) {
+				throw new Error(
+					`Missing or invalid properties in details at index ${index}. Ensure requestKey and presignedUrls are valid.`
+				);
+			}
+		});
+
+		const promises = fileObjects.map(({ file, details }) => this.upload(file, details));
+
+		const results = await Promise.allSettled(promises);
+
+		const successes = results.filter((result) => result.status === "fulfilled");
+		const failures = results.filter((result) => result.status === "rejected");
+
+		if (successes.length && typeof onAllSuccess === "function") {
+			onAllSuccess(successes);
+		}
+
+		if (failures.length && typeof onSomeFailure === "function") {
+			onSomeFailure(failures);
+		}
+
+		return { successes, failures, results };
+	}
+
+	log(message, level = "log", details) {
+		if (this.debug) {
+			console[level](message, details);
+		}
 	}
 }
 

@@ -1,17 +1,16 @@
-````markdown
 # VpUploader
 
-VpUploader is a robust JavaScript package built on top of [Uppy](https://uppy.io) for managing file uploads, specifically designed for handling multipart uploads to AWS S3. It provides configurable options, event hooks, and seamless integration with custom presigned URL endpoints.
+VpUploader is a robust JavaScript library built on top of [Uppy](https://uppy.io) for managing file uploads to AWS S3. It supports both single and multipart uploads, with detailed event hooks for monitoring and advanced configuration options.
 
 ---
 
 ## Features
 
-- **Configurable Chunk Size**: Optimize uploads for large files with customizable chunk sizes.
-- **Event Hooks**: Handle progress, success, errors, and multipart upload completion.
-- **Uppy Integration**: Extends Uppy with custom AWS S3 multipart upload logic.
-- **File Type Restrictions**: Specify allowed file types for uploads.
-- **Presigned URL Support**: Easily integrate with APIs providing presigned URLs for secure uploads.
+- **Single & Multipart Uploads**: Automatically manages file chunking for large files.
+- **Configurable**: Fine-tune chunk sizes, allowed file types, and debug modes.
+- **Event Hooks**: Receive detailed progress, success, and error updates.
+- **Batch Uploads**: Easily handle multiple files with a single method call.
+- **Custom File Details**: Pass individual details for each file, including presigned URLs.
 
 ---
 
@@ -22,7 +21,6 @@ Install the package using npm:
 ```bash
 npm install vpuploader
 ```
-````
 
 ---
 
@@ -36,46 +34,86 @@ import VpUploader from "vpuploader";
 const uploader = new VpUploader({
 	chunkSize: 50 * 1024 * 1024, // 50 MiB
 	debug: true,
-	allowedFileTypes: ["video/*"],
-});
-```
-
-### Event Hooks
-
-Use the `.use()` method to register callbacks for key events:
-
-```javascript
-uploader.use({
-	onMultipartComplete: (details) => {
-		console.log("Multipart upload completed:", details);
-	},
-	onProgress: (progress) => {
-		console.log("Upload progress:", progress);
-	},
-	onSuccess: (details) => {
-		console.log("Upload successful:", details);
-	},
-	onError: (error) => {
-		console.error("Upload error:", error);
-	},
-});
-```
-
-### Upload a File
-
-To upload a file, provide the file object and details fetched from your presigned URL API:
-
-```javascript
-uploader.upload(file, {
-	requestKey: "<REQUEST_KEY>",
-	uploadId: "<UPLOAD_ID>",
-	presignedUrls: ["<PRESIGNED_URL_PART_1>", "<PRESIGNED_URL_PART_2>"],
+	allowedFileTypes: ["video/*"], // Restrict to video files
 });
 ```
 
 ---
 
-## Configuration Options
+### Register Event Hooks
+
+Use the `.use()` method to register event callbacks:
+
+```javascript
+uploader.use({
+	onProgress: (progress) => console.log("Upload progress:", progress),
+	onSuccess: (details) => console.log("Upload successful:", details),
+	onError: (error) => console.error("Upload error:", error),
+	onMultipartComplete: (details) => console.log("Multipart upload completed:", details),
+	onFileRemoved: (file) => console.log("File removed:", file),
+	onCancelAll: () => console.log("All uploads canceled"),
+});
+```
+
+---
+
+### Upload a Single File
+
+Call the `upload` method for individual file uploads:
+
+```javascript
+const file = document.getElementById("filePicker").files[0];
+const details = {
+	requestKey: "unique-request-key",
+	uploadId: "multipart-upload-id", // Optional for single-part uploads
+	presignedUrls: ["https://example.com/presigned-url"],
+};
+
+uploader.upload(file, details).then(() => {
+	console.log("File uploaded successfully");
+});
+```
+
+---
+
+### Upload Multiple Files
+
+Use the `uploadFiles` method for batch uploads. Pass an array of file objects, each containing a `file` and its corresponding `details`.
+
+```javascript
+const files = [
+	{
+		file: file1,
+		details: {
+			requestKey: "request-key-1",
+			uploadId: "upload-id-1",
+			presignedUrls: ["url1-part1", "url1-part2"],
+		},
+	},
+	{
+		file: file2,
+		details: {
+			requestKey: "request-key-2",
+			uploadId: "upload-id-2",
+			presignedUrls: ["url2-part1", "url2-part2"],
+		},
+	},
+];
+
+uploader
+	.uploadFiles(files, {
+		onAllSuccess: (successes) => console.log("All successful uploads:", successes),
+		onSomeFailure: (failures) => console.error("Failed uploads:", failures),
+	})
+	.then(({ successes, failures }) => {
+		console.log(`${successes.length} files uploaded successfully.`);
+		console.error(`${failures.length} files failed.`);
+	});
+```
+
+---
+
+### Configuration Options
 
 | Option             | Type      | Default Value             | Description                              |
 | ------------------ | --------- | ------------------------- | ---------------------------------------- |
@@ -85,123 +123,217 @@ uploader.upload(file, {
 
 ---
 
-## Example
+### API Reference
 
-Here's a complete example integrating `VpUploader` with an API providing presigned URLs:
-
-```html
-<!DOCTYPE html>
-<html lang="en">
-	<head>
-		<meta charset="UTF-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<title>VpUploader Example</title>
-	</head>
-	<body>
-		<input type="file" id="picker" />
-		<button id="uploadButton">Upload</button>
-
-		<script type="module">
-			import VpUploader from "vpuploader";
-
-			const BEARER = "your-token-here";
-			const CHUNK_SIZE = 50 * 1024 * 1024;
-
-			const uploader = new VpUploader({
-				chunkSize: CHUNK_SIZE,
-				debug: true,
-			});
-
-			uploader.use({
-				onMultipartComplete: (response) => {
-					console.log("Multipart upload complete:", response);
-				},
-				onProgress: (progress) => {
-					console.log("Progress:", progress);
-				},
-				onSuccess: (details) => {
-					console.log("Upload successful:", details);
-				},
-				onError: (error) => {
-					console.error("Error:", error);
-				},
-			});
-
-			const picker = document.getElementById("picker");
-			const uploadButton = document.getElementById("uploadButton");
-
-			uploadButton.onclick = async () => {
-				const file = picker.files[0];
-				if (!file) {
-					alert("Please select a file.");
-					return;
-				}
-
-				const response = await fetch("https://your-api.example.com/uploads/presigned-urls", {
-					method: "POST",
-					headers: {
-						Authorization: `Bearer ${BEARER}`,
-						"Content-Type": "application/json",
-					},
-					body: JSON.stringify({
-						fileName: file.name,
-						fileSize: file.size,
-						mimeType: file.type,
-					}),
-				});
-
-				if (!response.ok) {
-					console.error("Failed to get presigned URLs:", response.statusText);
-					return;
-				}
-
-				const { requestKey, uploadId, presignedUrls } = await response.json();
-
-				uploader.upload(file, {
-					requestKey,
-					uploadId,
-					presignedUrls,
-				});
-			};
-		</script>
-	</body>
-</html>
-```
-
----
-
-## API Reference
-
-### Constructor
+#### **Constructor**
 
 ```javascript
 new VpUploader(config);
 ```
 
-- **`config`**:
-  - `chunkSize` (`number`): Size of chunks in bytes (default: 50 MiB).
-  - `debug` (`boolean`): Enable debug mode (default: `true`).
-  - `allowedFileTypes` (`array`): List of allowed file types (default: `["video/*"]`).
+| Parameter | Type     | Description                              |
+| --------- | -------- | ---------------------------------------- |
+| `config`  | `Object` | Configuration object (see options above) |
 
-### Methods
+---
 
-#### `use(callbacks)`
+#### **`use(callbacks)`**
 
 Registers event callbacks.
 
-- `callbacks`:
-  - `onMultipartComplete(details)`: Fired when all parts of a multipart upload are completed.
-  - `onSuccess(details)`: Fired when the upload is successful.
-  - `onError(error)`: Fired when an error occurs during upload.
-  - `onProgress(progress)`: Fired to provide upload progress.
+| Callback              | Description                                        |
+| --------------------- | -------------------------------------------------- |
+| `onProgress`          | Fired to provide upload progress updates.          |
+| `onSuccess`           | Fired when a file upload is successful.            |
+| `onError`             | Fired when an error occurs during upload.          |
+| `onMultipartComplete` | Fired when all parts of a multipart upload finish. |
+| `onFileRemoved`       | Fired when a file is removed.                      |
+| `onCancelAll`         | Fired when all uploads are canceled.               |
 
-#### `upload(file, details)`
+---
 
-Uploads a file.
+#### **`upload(file, details)`**
 
-- **`file`** (`File`): File object to upload.
-- **`details`**:
+Uploads a single file.
 
-  - `requestKey` (`string`): Request key provided by the API.
-  - `uploadId` (`string`): Upload ID for multipart uploads.
-  - `presignedUrls` (`array`): Array of presigned URLs for each part.
+| Parameter | Type     | Description                                          |
+| --------- | -------- | ---------------------------------------------------- |
+| `file`    | `File`   | The file to be uploaded.                             |
+| `details` | `Object` | Details required for upload (e.g., `presignedUrls`). |
+
+---
+
+#### **`uploadFiles(fileObjects, callbacks)`**
+
+Uploads multiple files in a batch.
+
+| Parameter     | Type                | Description                                             |
+| ------------- | ------------------- | ------------------------------------------------------- |
+| `fileObjects` | `Array`             | Array of objects, each containing `file` and `details`. |
+| `callbacks`   | `Object` (optional) | Callbacks for handling batch results.                   |
+
+---
+
+#### **`getFile(fileId)`**
+
+Retrieves a specific file by its ID.
+
+| Parameter | Type     | Description                     |
+| --------- | -------- | ------------------------------- |
+| `fileId`  | `string` | The ID of the file to retrieve. |
+
+- **Returns**: The file object associated with the provided `fileId`, or `undefined` if not found.
+
+---
+
+#### **`getFiles()`**
+
+Retrieves all files currently managed by Uppy.
+
+- **Returns**: An array of all file objects.
+
+---
+
+#### **`getFilesByIds(fileIds)`**
+
+Retrieves multiple files by their IDs.
+
+| Parameter | Type    | Description                       |
+| --------- | ------- | --------------------------------- |
+| `fileIds` | `Array` | An array of file IDs to retrieve. |
+
+- **Returns**: An array of file objects matching the provided IDs.
+
+---
+
+#### **`getState()`**
+
+Retrieves the current state of the Uppy instance.
+
+- **Returns**: An object representing the internal state of Uppy, including the list of files, progress data, and other configuration details.
+
+---
+
+#### **`removeFile(fileId)`**
+
+Removes a specific file from Uppy, canceling its upload if it's in progress.
+
+| Parameter | Type     | Description                   |
+| --------- | -------- | ----------------------------- |
+| `fileId`  | `string` | The ID of the file to remove. |
+
+---
+
+#### **`cancelAll()`**
+
+Cancels all ongoing uploads and clears the current file queue.
+
+- **Description**: This is useful if you want to stop all uploads and reset the uploader to its initial state.
+
+---
+
+#### **`retryUpload(fileId)`**
+
+Retries the upload for a specific file.
+
+| Parameter | Type     | Description                  |
+| --------- | -------- | ---------------------------- |
+| `fileId`  | `string` | The ID of the file to retry. |
+
+---
+
+#### **`retryAll()`**
+
+Retries all failed uploads.
+
+- **Description**: This is useful for retrying multiple uploads in one call, especially after fixing any issues causing failures.
+
+---
+
+#### **`getObjectOfFilesPerState()`**
+
+Retrieves an object categorizing files by their upload states.
+
+- **Returns**: An object where keys represent states (e.g., `uploading`, `failed`) and values are arrays of files in each state.
+
+---
+
+### Examples
+
+#### Retrieving and Managing Files
+
+```javascript
+// Get all files
+const allFiles = uploader.getFiles();
+console.log("All files:", allFiles);
+
+// Get a specific file
+const file = uploader.getFile("file-id");
+console.log("Specific file:", file);
+
+// Remove a file
+uploader.removeFile("file-id");
+console.log("File removed.");
+```
+
+#### Canceling and Retrying Uploads
+
+```javascript
+// Cancel all uploads
+uploader.cancelAll();
+console.log("All uploads canceled.");
+
+// Retry a specific upload
+uploader.retryUpload("file-id");
+
+// Retry all failed uploads
+uploader.retryAll();
+```
+
+---
+
+### Example: Full HTML Integration
+
+```html
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>VpUploader Example</title>
+	</head>
+	<body>
+		<input type="file" id="filePicker" multiple />
+		<button id="uploadButton">Upload</button>
+
+		<script type="module">
+			import VpUploader from "vpuploader";
+
+			const uploader = new VpUploader({
+				chunkSize: 50 * 1024 * 1024,
+				debug: true,
+				allowedFileTypes: ["video/*"],
+			});
+
+			uploader.use({
+				onProgress: (progress) => console.log("Progress:", progress),
+				onSuccess: (details) => console.log("File uploaded:", details),
+				onError: (error) => console.error("Error:", error),
+			});
+
+			document.getElementById("uploadButton").onclick = async () => {
+				const files = Array.from(document.getElementById("filePicker").files).map((file) => ({
+					file,
+					details: {
+						requestKey: `key-${file.name}`,
+						presignedUrls: ["https://example.com/upload-url"],
+					},
+				}));
+
+				const { successes, failures } = await uploader.uploadFiles(files);
+
+				console.log(`${successes.length} files uploaded successfully.`);
+				console.error(`${failures.length} files failed.`);
+			};
+		</script>
+	</body>
+</html>
+```
